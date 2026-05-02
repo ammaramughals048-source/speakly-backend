@@ -85,16 +85,5 @@ router.get('/stats', protect, adminOnly, async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 });
-// GET all users (admin only)
-router.get('/users', authMiddleware, async (req, res) => {
-  const users = await User.find().select('-password');
-  res.json({ users });
-});
-
-// DELETE user
-router.delete('/users/:id', authMiddleware, async (req, res) => {
-  await User.findByIdAndDelete(req.params.id);
-  res.json({ message: 'User deleted' });
-});
 
 module.exports = router;
