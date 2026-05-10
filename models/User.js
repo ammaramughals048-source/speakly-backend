@@ -20,7 +20,11 @@ const UserSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: true
+        required: false   // ← Google users ka password nahi hoga
+    },
+    googleId: {
+        type: String,
+        default: null     // ← Google OAuth users ka ID store hoga
     },
     role: {
         type: String,
