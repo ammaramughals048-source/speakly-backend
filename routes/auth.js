@@ -183,4 +183,31 @@ router.get('/google/callback',
     }
 );
 
+// ══════════════════════════════════════
+// POST /api/auth/reset-admin-password
+// TEMPORARY ROUTE — delete after use!
+// ══════════════════════════════════════
+router.post('/reset-admin-password', async (req, res) => {
+    try {
+        const { email, newPassword, secretKey } = req.body;
+
+        // Secret key check — sirf tum jaante ho
+        if (secretKey !== 'speakly-reset-2024') {
+            return res.status(403).json({ message: 'Invalid secret key' });
+        }
+
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.role !== 'Admin') return res.status(403).json({ message: 'Not an admin account' });
+
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        await user.save();
+
+        res.json({ success: true, message: `Password reset for ${user.email}` });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
 module.exports = router;

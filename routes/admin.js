@@ -79,7 +79,9 @@ router.get('/stats', protect, async (req, res) => {
             .limit(5);
         res.json({ 
             success: true, 
-            stats: { totalUsers, blockedUsers, topUsers }
+            totalUsers,
+            blockedUsers,
+            topUsers
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
