@@ -9,34 +9,6 @@ const User = require('../models/User');
 // ── OTP Generator ──
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// ── Send OTP Email via Resend ──
-const sendOTPEmail = async (email, otp, name) => {
-    const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
-        },
-        body: JSON.stringify({
-            from: 'Speakly <onboarding@resend.dev>',
-            to: [email],
-            subject: 'Your Speakly Verification Code',
-            html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;background:#0c1021;color:#e0f7ff;padding:32px;border-radius:16px;">
-                <h2 style="color:#00f2fe;">Hey ${name}! 👋</h2>
-                <p style="color:#7a9bb5;">Your Speakly verification code:</p>
-                <div style="background:rgba(0,242,254,0.08);border:2px solid #00f2fe;border-radius:12px;padding:24px;text-align:center;margin:20px 0;">
-                    <span style="font-size:42px;font-weight:900;letter-spacing:12px;color:#00f2fe;">${otp}</span>
-                </div>
-                <p style="color:#7a9bb5;font-size:13px;">Expires in <strong style="color:#ffcc00;">10 minutes</strong>. Do not share it.</p>
-            </div>`
-        })
-    });
-    if (!res.ok) {
-        const err = await res.text();
-        throw new Error('Resend error: ' + err);
-    }
-};
-
 // ── JWT Token Generator ──
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -55,14 +27,11 @@ async (accessToken, refreshToken, profile, done) => {
         const email = profile.emails[0].value;
         const name = profile.displayName;
         const googleId = profile.id;
-
         let user = await User.findOne({ $or: [{ googleId }, { email }] });
-
         if (user) {
             if (!user.googleId) { user.googleId = googleId; await user.save(); }
             return done(null, user);
         }
-
         const baseUsername = name.toLowerCase().replace(/\s+/g, '') + Math.floor(Math.random() * 1000);
         user = await User.create({ name, username: baseUsername, email, googleId, password: null, role: 'Learner', isVerified: true });
         return done(null, user);
@@ -78,6 +47,7 @@ passport.deserializeUser(async (id, done) => {
 });
 
 // ── POST /api/auth/register ──
+// Saves user + generates OTP, returns OTP to frontend (frontend sends email via EmailJS)
 router.post('/register', async (req, res) => {
     try {
         const { name, username, email, password, role } = req.body;
@@ -108,9 +78,8 @@ router.post('/register', async (req, res) => {
             await User.create({ name, username, email, password: hashedPassword, role: role || 'Learner', isVerified: false, otp, otpExpiry });
         }
 
-        await sendOTPEmail(email, otp, name);
-
-        res.status(201).json({ success: true, message: 'OTP sent to your email.', email });
+        // Return OTP to frontend — frontend will send email via EmailJS
+        res.status(201).json({ success: true, message: 'User saved. Send OTP via frontend.', email, otp });
 
     } catch (error) {
         console.error('Register error:', error);
@@ -125,7 +94,7 @@ router.post('/verify-otp', async (req, res) => {
         const user = await User.findOne({ email });
         if (!user) return res.status(404).json({ message: 'User not found' });
         if (user.isVerified) return res.status(400).json({ message: 'Already verified' });
-        if (user.otp !== otp) return res.status(400).json({ message: 'Invalid OTP' });
+        if (user.otp !== otp) return res.status(400).json({ message: 'Invalid OTP. Try again.' });
         if (new Date() > user.otpExpiry) return res.status(400).json({ message: 'OTP expired. Request a new one.' });
 
         user.isVerified = true;
@@ -154,8 +123,8 @@ router.post('/resend-otp', async (req, res) => {
         user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
         await user.save();
 
-        await sendOTPEmail(email, otp, user.name);
-        res.json({ success: true, message: 'New OTP sent!' });
+        // Return new OTP to frontend
+        res.json({ success: true, message: 'New OTP generated!', otp });
 
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -169,7 +138,6 @@ router.post('/login', async (req, res) => {
         const user = await User.findOne({ email });
         if (!user) return res.status(400).json({ message: 'Invalid email or password' });
         if (!user.password) return res.status(400).json({ message: 'This account uses Google login.' });
-
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: 'Invalid email or password' });
         if (!user.isVerified) return res.status(403).json({ message: 'Please verify your email first.', needsVerification: true, email: user.email });
@@ -195,7 +163,7 @@ router.get('/google/callback',
     }
 );
 
-// ── Reset Admin Password (Temporary) ──
+// ── Reset Admin Password ──
 router.post('/reset-admin-password', async (req, res) => {
     try {
         const { email, newPassword, secretKey } = req.body;
