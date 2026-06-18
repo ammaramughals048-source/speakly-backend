@@ -83,37 +83,60 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-router.post('/send-otp' , async (req, res)=>{
-    try {
-  const { email } = req.body;
-  
-  if (!email) {
-    return res.status(400).json({ message: 'Email required hai' });
+const nodemailer = require('nodemailer');
+
+// Transporter ek baar ban jaye
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER, // Railway variable se uthayega
+    pass: process.env.EMAIL_PASS // Railway variable se uthayega
+  },
+  tls: {
+    rejectUnauthorized: false
   }
+});
 
-  // 6 digit OTP banao
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  
-  // User dhoondo ya naya banao
-  let user = await User.findOne({ email });
-  if (!user) {
-    user = new User({ email });
+router.post('/send-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: 'Email required hai' });
+    }
+
+    // 6 digit OTP banao
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // User dhoondo ya naya banao
+    let user = await User.findOne({ email });
+    if (!user) {
+      user = new User({ email });
+    }
+
+    // OTP + expiry save karo - 10 min ke liye
+    user.otp = otp;
+    user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+    await user.save();
+
+    // Email bhejo
+    await transporter.sendMail({
+      from: `"Speakly" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Speakly - Your OTP Code',
+      text: `Your OTP is: ${otp}. Valid for 10 minutes.`,
+      html: `<h3>Your OTP Code: ${otp}</h3><p>Valid for 10 minutes only.</p>`
+    });
+
+    res.json({ message: 'OTP bhej diya hai email pe', success: true });
+
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ message: 'Server error' });
   }
-
-  // OTP + expiry save karo - 10 min ke liye
-  user.otp = otp;
-  user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
-  await user.save();
-
-  // Email bhejo - nodemailer use kar rahe ho to
-  // await sendOTPEmail(email, otp); 
-
-  res.json({ message: 'OTP bhej diya hai email pe', success: true });
-
-} catch (err) {
-  console.log(err);
-  res.status(500).json({ message: 'Server error' });
-}
 });
 
 module.exports = router;
