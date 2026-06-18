@@ -22,8 +22,6 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: false   // ← Google users ka password nahi hoga
     },
-    otp: { type: String },
-    otpExpiry: { type: Date},
     googleId: {
         type: String,
         default: null     // ← Google OAuth users ka ID store hoga
@@ -65,7 +63,19 @@ const UserSchema = new mongoose.Schema({
     lastActive: {
         type: Date,
         default: Date.now
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    otp: {
+        type: String,
+        default: null
+    },
+    otpExpiry: {
+        type: Date,
+        default: null
     }
 }, { timestamps: true });
 
-module.exports = mongoose.models.User || mongoose.model('User', UserSchema);
+module.exports = mongoose.model('User', UserSchema);
