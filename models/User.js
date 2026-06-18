@@ -22,6 +22,8 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: false   // ← Google users ka password nahi hoga
     },
+    otp: { type: String },
+    otpExpiry: { type: Date},
     googleId: {
         type: String,
         default: null     // ← Google OAuth users ka ID store hoga
