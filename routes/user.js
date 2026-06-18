@@ -1,75 +1,81 @@
-const express = require('express');
-const router = express.Router();
-const User = require('../models/User');
-const { protect } = require('../middleware/auth');
+const mongoose = require('mongoose');
 
-// ── Get My Profile ──
-router.get('/profile', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).select('-password');
-        res.json({ success: true, user });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-// ── Update XP & Streak ──
-router.put('/progress', protect, async (req, res) => {
-    try {
-        const { xp, streak, level, languages } = req.body;
-        const user = await User.findByIdAndUpdate(
-            req.user.id,
-            { xp, streak, level, languages, lastActive: Date.now() },
-            { new: true }
-        ).select('-password');
-        res.json({ success: true, user });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-// ── Add Language ──
-router.post('/language', protect, async (req, res) => {
-    try {
-        const { name, flag } = req.body;
-        const user = await User.findById(req.user.id);
-        const already = user.languages.find(l => l.name === name);
-        if (already) {
-            return res.status(400).json({ message: 'Language already added' });
+const UserSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    username: {
+        type: String,
+        required: true,
+        unique: true,
+        trim: true
+    },
+    email: {
+        type: String,
+        required: true,
+        unique: true,
+        lowercase: true
+    },
+    password: {
+        type: String,
+        required: false   // ← Google users ka password nahi hoga
+    },
+    googleId: {
+        type: String,
+        default: null     // ← Google OAuth users ka ID store hoga
+    },
+    role: {
+        type: String,
+        enum: ['Learner', 'Admin'],
+        default: 'Learner'
+    },
+    isBlocked: {
+        type: Boolean,
+        default: false
+    },
+    xp: {
+        type: Number,
+        default: 0
+    },
+    streak: {
+        type: Number,
+        default: 0
+    },
+    level: {
+        type: Number,
+        default: 1
+    },
+    languages: [{
+        name: String,
+        flag: String,
+        progress: {
+            type: Number,
+            default: 0
         }
-        user.languages.push({ name, flag, progress: 0 });
-        await user.save();
-        res.json({ success: true, languages: user.languages });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
+    }],
+    badges: [{
+        name: String,
+        icon: String,
+        earnedAt: Date
+    }],
+    lastActive: {
+        type: Date,
+        default: Date.now
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    otp: {
+        type: String,
+        default: null
+    },
+    otpExpiry: {
+        type: Date,
+        default: null
     }
-});
+}, { timestamps: true });
 
-// ── Delete Language ──
-router.delete('/language/:name', protect, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id);
-        user.languages = user.languages.filter(
-            l => l.name !== req.params.name
-        );
-        await user.save();
-        res.json({ success: true, languages: user.languages });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-// ── Get Leaderboard ──
-router.get('/leaderboard', protect, async (req, res) => {
-    try {
-        const users = await User.find({ role: 'Learner' })
-            .select('name username xp streak level')
-            .sort({ xp: -1 })
-            .limit(20);
-        res.json({ success: true, users });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-module.exports = router;
+module.exports = mongoose.model('User', UserSchema);

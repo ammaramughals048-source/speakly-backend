@@ -4,7 +4,39 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const nodemailer = require('nodemailer');
 const User = require('../models/User');
+
+// ── Nodemailer Setup (Gmail) ──
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS   // Gmail App Password (16 chars)
+    }
+});
+
+// ── OTP Generator ──
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// ── Send OTP Email ──
+const sendOTPEmail = async (email, otp, name) => {
+    await transporter.sendMail({
+        from: `"Speakly 🐦" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: 'Your Speakly Verification Code',
+        html: `
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;background:#0c1021;color:#e0f7ff;padding:32px;border-radius:16px;border:1px solid rgba(0,242,254,0.2);">
+            <h2 style="color:#00f2fe;margin-bottom:8px;">Hey ${name}! 👋</h2>
+            <p style="color:#7a9bb5;margin-bottom:24px;">Welcome to Speakly! Here is your verification code:</p>
+            <div style="background:rgba(0,242,254,0.08);border:2px solid #00f2fe;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+                <span style="font-size:42px;font-weight:900;letter-spacing:12px;color:#00f2fe;">${otp}</span>
+            </div>
+            <p style="color:#7a9bb5;font-size:13px;">This code expires in <strong style="color:#ffcc00;">10 minutes</strong>. Do not share it with anyone.</p>
+            <p style="color:#7a9bb5;font-size:12px;margin-top:16px;">If you did not sign up for Speakly, ignore this email.</p>
+        </div>`
+    });
+};
 
 // ── JWT Token Generator ──
 const generateToken = (id) => {
@@ -64,34 +96,99 @@ passport.deserializeUser(async (id, done) => {
 
 // ══════════════════════════════════════
 // POST /api/auth/register
+// Step 1: Save user (unverified) + send OTP
 // ══════════════════════════════════════
 router.post('/register', async (req, res) => {
     try {
         const { name, username, email, password, role } = req.body;
 
-        // Check duplicate
+        // Check duplicate email
         const existingEmail = await User.findOne({ email });
-        if (existingEmail) return res.status(400).json({ message: 'Email already registered' });
+        if (existingEmail && existingEmail.isVerified) {
+            return res.status(400).json({ message: 'Email already registered' });
+        }
 
+        // Check duplicate username
         const existingUsername = await User.findOne({ username });
-        if (existingUsername) return res.status(400).json({ message: 'Username already taken' });
+        if (existingUsername && existingUsername.isVerified) {
+            return res.status(400).json({ message: 'Username already taken' });
+        }
 
         // Hash password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        const user = await User.create({
-            name,
-            username,
-            email,
-            password: hashedPassword,
-            role: role || 'Learner'
-        });
+        // Generate OTP
+        const otp = generateOTP();
+        const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-        const token = generateToken(user._id);
+        // If unverified account exists with same email, update it
+        if (existingEmail && !existingEmail.isVerified) {
+            existingEmail.name = name;
+            existingEmail.username = username;
+            existingEmail.password = hashedPassword;
+            existingEmail.otp = otp;
+            existingEmail.otpExpiry = otpExpiry;
+            await existingEmail.save();
+        } else {
+            await User.create({
+                name, username, email,
+                password: hashedPassword,
+                role: role || 'Learner',
+                isVerified: false,
+                otp,
+                otpExpiry
+            });
+        }
+
+        // Send OTP email
+        await sendOTPEmail(email, otp, name);
 
         res.status(201).json({
             success: true,
+            message: 'OTP sent to your email. Please verify to complete registration.',
+            email  // frontend ko pata rahe kahan verify karna hai
+        });
+
+    } catch (error) {
+        console.error('Register error:', error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// ══════════════════════════════════════
+// POST /api/auth/verify-otp
+// Step 2: Verify OTP → activate account
+// ══════════════════════════════════════
+router.post('/verify-otp', async (req, res) => {
+    try {
+        const { email, otp } = req.body;
+
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.isVerified) return res.status(400).json({ message: 'Account already verified' });
+
+        // Check OTP
+        if (user.otp !== otp) {
+            return res.status(400).json({ message: 'Invalid OTP. Please try again.' });
+        }
+
+        // Check expiry
+        if (new Date() > user.otpExpiry) {
+            return res.status(400).json({ message: 'OTP expired. Please request a new one.' });
+        }
+
+        // Activate account
+        user.isVerified = true;
+        user.otp = null;
+        user.otpExpiry = null;
+        await user.save();
+
+        const token = generateToken(user._id);
+
+        res.json({
+            success: true,
+            message: 'Email verified successfully! Welcome to Speakly 🎉',
             token,
             user: {
                 id: user._id,
@@ -104,6 +201,31 @@ router.post('/register', async (req, res) => {
                 level: user.level
             }
         });
+
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// ══════════════════════════════════════
+// POST /api/auth/resend-otp
+// ══════════════════════════════════════
+router.post('/resend-otp', async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        if (user.isVerified) return res.status(400).json({ message: 'Account already verified' });
+
+        const otp = generateOTP();
+        user.otp = otp;
+        user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+        await user.save();
+
+        await sendOTPEmail(email, otp, user.name);
+
+        res.json({ success: true, message: 'New OTP sent to your email!' });
 
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -128,6 +250,7 @@ router.post('/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ message: 'Invalid email or password' });
 
+        if (!user.isVerified) return res.status(403).json({ message: 'Please verify your email first. Check your inbox for the OTP.', needsVerification: true, email: user.email });
         if (user.isBlocked) return res.status(403).json({ message: 'Account blocked. Contact support.' });
 
         const token = generateToken(user._id);
